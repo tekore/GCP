@@ -1,0 +1,11 @@
+---
+- name: Provision cloud-store
+  hosts: _cloud_store
+  become: yes
+  become_user: root
+  vars_files:
+    - ./../roles/common/vars/vars.yml
+    - ./../roles/store/vars/vars.yml
+  roles:
+    - common
+    - store

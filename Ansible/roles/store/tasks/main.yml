@@ -1,0 +1,190 @@
+---
+- name: Allow media wiki access from internal networks
+  ufw:
+    rule: allow
+    port: "{{ vars.firewall_ports.apache }}"
+    proto: tcp
+    src: '{{ item }}'
+  with_items:
+    - "{{ vars.firewall_networks.internal }}"
+
+- name: Install dependencies
+  apt:
+    pkg:
+      - tasksel
+      - python3-pymysql
+      - nagios4
+      - nagios-plugins-contrib
+      - nagios-nrpe-plugin
+      - expect
+      - python-apt
+    state: latest
+    update_cache: true
+
+- name: Remove python2 package
+  apt:
+    name: python-is-python2
+    state: absent
+
+- name: Tasksel install LAMP server
+  command: tasksel install lamp-server
+  become: true
+  become_user: root
+
+- name: Ensure mysql is running and starts on boot
+  service:
+    name: mysql
+    state: started
+    enabled: yes
+  become: yes
+
+- name: Install media wiki
+  apt:
+    pkg:
+      - mediawiki
+    state: latest
+    update_cache: true
+
+- name: Copy Media wiki files to correct directory
+  command: cp -R /var/lib/mediawiki/ /var/www/html/
+  become: true
+  become_user: root
+
+- name: Copy mediawiki apache2 config
+  ansible.builtin.copy:
+    src: "{{ vars.files.apache_config }}"
+    dest: "{{ vars.files.apache_config_dest }}"
+    owner: root
+    group: root
+    mode: '0777'
+
+- name: Copy cloud wiki backup
+  ansible.builtin.copy:
+    src: "{{ vars.files.wiki_backup }}"
+    dest: "{{ vars.files.wiki_backup_dest }}"
+    owner: root
+    group: root
+    mode: '0777'
+
+- name: Create database user with all database privileges
+  community.mysql.mysql_user:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_user: "{{ vars.login.login_user }}"
+    login_password: "{{ vars.login.login_password }}"
+    name: "{{ vars.login.sql_user }}"
+    password: "{{ vars.login.sql_password }}"
+    priv: '*.*:ALL'
+    state: present
+    check_implicit_admin: yes
+
+- name: Create a new 'cloudwiki' database
+  community.mysql.mysql_db:
+    name: cloudwiki
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_user: "{{ vars.login.sql_user }}"
+    login_password: "{{ vars.login.sql_password }}"
+    state: present
+    check_implicit_admin: yes
+
+- name: Run mediawiki localsettings.php setup
+  command: php /usr/share/mediawiki/maintenance/install.php --confpath=/etc/mediawiki/ --dbname=cloudwiki --dbserver="localhost" --installdbuser="{{ vars.login.sql_user }}" --installdbpass="{{ vars.login.sql_password }}" --dbuser="{{ vars.login.sql_user }}" --dbpass="{{ vars.login.sql_password }}" --server="http://"{{ vars.ip.host_ip }}"" --scriptpath=/mediawiki --lang=en-gb --pass="{{ vars.login.login_password }}" "cloudwiki" "tekore"
+  become: true
+  become_user: root
+  args:
+    creates: /etc/mediawiki/LocalSettings.php
+
+- name: Restore database ignoring errors
+  community.mysql.mysql_db:
+    name: cloudwiki
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_user: "{{ vars.login.sql_user }}"
+    login_password: "{{ vars.login.sql_password }}"
+    state: import
+    target: /tmp/cloudwiki-backup.sql
+    force: yes
+
+- name: Enable mediawiki
+  command: a2ensite mediawiki.conf
+  become: true
+  become_user: root
+
+- name: Create the wikibackup directory
+  file:
+    path: "{{ vars.files.wiki_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Copy wiki backup script and set permissions
+  ansible.builtin.copy:
+    src: "{{ vars.files.wiki_backup_script }}"
+    dest: "{{ vars.files.wiki_backup_script_dest }}"
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Enable wiki backup cronjob
+  ansible.builtin.cron:
+    name: WikiBackup
+    minute: "*/5"
+    hour: "*"
+    day: "*"
+    month: "*"
+    job: 'bash "{{ vars.files.wiki_backup_script_dest }}"'
+
+- name: Copy ssh keys for wiki backup
+  ansible.builtin.copy:
+    src: "{{ vars.files.ssh_keys }}"
+    dest: "{{ vars.files.ssh_keys_dest }}"
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Enable auth modules
+  command: a2enmod authz_groupfile auth_digest
+  become: true
+  become_user: root
+
+- name: Copy apache2 conf
+  ansible.builtin.copy:
+    src: "{{ vars.files.apache2_config }}"
+    dest: "{{ vars.files.apache2_config_dest }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy Nagios apache2 conf
+  ansible.builtin.copy:
+    src: "{{ vars.files.nagios_config }}"
+    dest: "{{ vars.files.nagios_config_dest }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Restart apache2
+  command: systemctl restart apache2.service
+  become: true
+  become_user: root
+
+- name: Create user for Nagios
+  #command: |
+  shell: |
+    /usr/bin/expect <<EOF
+    spawn /usr/bin/htdigest -c /etc/nagios4/htdigest.users Nagios4 tekore
+    expect "password"
+    send "password\r"
+    expect "password"
+    send "password\r"
+    interact
+    EOF
+  args:
+    executable: /bin/bash
+  register: large_script_result
+  become: true
+  become_user: root
+
+- name: Restart apache2
+  command: systemctl restart apache2.service
+  become: true
+  become_user: root

@@ -1,0 +1,101 @@
+---
+- name: Copy default apt sources
+  ansible.builtin.copy:
+    src: "{{ vars.files.repos_config }}"
+    dest: "{{ vars.files.repos_dest }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install Fail2Ban and Wireguard   
+  apt:
+    pkg:
+      - fail2ban
+      - wireguard
+    state: present
+    update_cache: yes
+
+- name: Copy fail2ban config and set permissions
+  ansible.builtin.copy:
+    src: "{{ vars.files.fail2ban_config }}"
+    dest: "{{ vars.files.fail2ban_dest }}"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start Fail2Ban
+  ansible.builtin.systemd:
+    name: fail2ban.service
+    state: started
+    enabled: yes
+
+- name: create server wireguard config
+  template:
+    src: "{{ vars.files.wireguard_config }}"
+    dest: "{{ vars.files.wireguard_dest }}"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: enable and persist ip forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    sysctl_set: yes
+    reload: yes
+
+- name: start wireguard and enable on boot
+  systemd:
+    name: wg-quick@wg0
+    enabled: yes
+    state: started
+
+- name: Create the duckdns directory
+  file:
+    path: "{{ vars.files.duckdns_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Copy duckdns script and set permissions
+  ansible.builtin.copy:
+    src: "{{ vars.files.duckdns_script }}"
+    dest: "{{ vars.files.duckdns_dest }}"
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: First run of duckdns script
+  command: bash /duckdns/duck.sh
+  become: true
+  become_user: root
+
+- name: Enable duckdns cronjob
+  ansible.builtin.cron:
+    name: duckDNS
+    minute: "*"
+    hour: "*"
+    day: "*"
+    month: "*"
+    job: 'bash "{{ vars.files.duckdns_dest }}"'
+
+- name: Allow all access from wireguard
+  ufw:
+    rule: allow
+    port: "{{ vars.firewall_ports.vpn }}"
+    proto: udp
+    src: '"{{ vars.firewall_networks.external }}"'
+
+- name: Allow route through the firewall to vpn tunnel
+  ufw:
+    rule: allow
+    route: yes
+    src: '"{{ vars.firewall_networks.internal }}"'
+    dest: '"{{ vars.firewall_networks.tunnel }}"'
+
+- name: Reload wireguard interface
+  command: systemctl restart wg-quick@wg0.service
+  become: true
+  become_user: root

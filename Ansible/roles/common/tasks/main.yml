@@ -1,0 +1,25 @@
+---
+- name: Install UFW
+  apt:
+    pkg:
+      - ufw
+    state: latest
+    update_cache: true
+
+- name: Check UFW is Enabled
+  ufw:
+    state: enabled
+
+- name: Enable UFW logging
+  ufw:
+    logging: 'True'
+
+- name: Allow SSH access from internal networks
+  ufw:
+    rule: allow
+    port: "{{ vars.default_firewall_ports.ssh }}"
+    proto: tcp
+    src: '{{ item }}'
+  with_items:
+    - "{{ vars.firewall_networks.tunnel }}"
+    - "{{ vars.firewall_networks.internal }}"

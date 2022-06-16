@@ -1,0 +1,11 @@
+---
+- name: Provision cloud-vpn
+  hosts: VPN
+  become: yes
+  become_user: root
+  vars_files:
+    - ./../roles/common/vars/vars.yml
+    - ./../roles/vpn/vars/vars.yml
+  roles:
+    - common
+    - vpn
