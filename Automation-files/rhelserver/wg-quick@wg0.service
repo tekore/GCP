@@ -13,7 +13,6 @@ Documentation=https://git.zx2c4.com/wireguard-tools/about/src/man/wg.8
 [Service]
 Type=simple
 RemainAfterExit=yes
-#ExecStartPre=/bin/sleep 30
 Restart=always
 RestartSec=10
 ExecStart=/usr/bin/wg-quick up %i
